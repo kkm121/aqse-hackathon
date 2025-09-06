@@ -20,16 +20,32 @@ def compute_sigmaE(coeffs_array, sigma_pauli_array, samplingVar_array=None):
     return float(np.sqrt(np.sum(var_terms)))
 
 # Default 4-qubit toy molecule
-pauli_list_4q = [
-  'ZIII','IZII','IIZI','IIIZ',
-  'ZZII','IIZZ','ZIZI','IZIZ',
-  'XXII','IIXX','XXXX','XYIZ'
-]
-coeffs_4q = {
- 'ZIII': -0.700, 'IZII':  0.300, 'IIZI':  0.250, 'IIIZ': -0.400,
- 'ZZII':  0.200, 'IIZZ': -0.150, 'ZIZI':  0.050, 'IZIZ': -0.060,
- 'XXII': -0.350, 'IIXX':  0.280, 'XXXX':  0.100, 'XYIZ':  0.070
-}
+# controller.py (snippet)
+
+# Try to auto-load a generated pauli file (pauli_h2.py) if present.
+try:
+    from pauli_h2 import pauli_list as _pauli_list_gen, coeffs as _coeffs_gen
+    maxlen = max(len(p) for p in _pauli_list_gen)
+    # normalize keys to full-length strings (pad with 'I' if needed)
+    pauli_list_4q = [p.ljust(maxlen, 'I') for p in _pauli_list_gen]
+    coeffs_4q = {p.ljust(maxlen, 'I'): float(_coeffs_gen[p]) for p in _pauli_list_gen}
+    print("Loaded generated Hamiltonian from pauli_h2.py")
+except Exception:
+    # Fallback to built-in toy Hamiltonian (ensure 4-char Pauli strings)
+    pauli_list_4q = [
+        'ZIII', 'IZII', 'IIZI', 'IIIZ',
+        'ZZII', 'IIZZ', 'ZIZI', 'IZIZ',
+        'XXII', 'IIXX', 'XXXX', 'XYIZ'
+    ]
+    coeffs_4q = {
+        'ZIII': -0.700, 'IZII': 0.300, 'IIZI': 0.250, 'IIIZ': -0.400,
+        'ZZII': 0.200, 'IIZZ': -0.150, 'ZIZI': 0.050, 'IZIZ': -0.060,
+        'XXII': -0.350, 'IIXX': 0.280, 'XXXX': 0.100, 'XYIZ': 0.070
+    }
+    # Pad all Pauli strings to length 4
+    pauli_list_4q = [p.ljust(4, 'I') for p in pauli_list_4q]
+    coeffs_4q = {p.ljust(4, 'I'): v for p, v in coeffs_4q.items()}
+
 
 def run_aqse(pauli_terms=None, coeffs_dict=None,
              n_qubits=4, iters=40, shots_per_eval=512, trust_threshold=0.07,

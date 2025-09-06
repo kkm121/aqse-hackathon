@@ -116,6 +116,8 @@ def measure_paulis(theta, pauli_list, shots_per_term=512, entangler=True, seed=N
         exp_exact = float(np.real_if_close(np.trace(rho @ M)))
         # simulate sampling noise (two-outcome binomial)
         p_plus = (1.0 + exp_exact) / 2.0
+        # Clamp p_plus to [0, 1] to avoid ValueError
+        p_plus = min(max(p_plus, 0.0), 1.0)
         counts_plus = rng.binomial(shots_per_term, p_plus)
         exp_sampled = (counts_plus - (shots_per_term - counts_plus)) / shots_per_term
         results[p] = float(exp_sampled)

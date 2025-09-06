@@ -56,5 +56,46 @@ if run_button:
     st.subheader("Decision trace (sample)")
     st.dataframe(df.head(80))
     st.download_button("Download iteration CSV", df.to_csv(index=False).encode('utf-8'), "aqse_results.csv")
-else:
+
+# Add comparison section to main UI (not sidebar)
+st.markdown("## AQSE vs Baseline Comparison")
+st.markdown(
+    "Run a multi-seed comparison between AQSE and baseline measurement. "
+    "Results and plots will be saved in the `results` folder."
+)
+compare_button = st.button("Run AQSE vs Baseline Comparison")
+
+if compare_button:
+    import subprocess
+    import pandas as pd
+    from PIL import Image
+    with st.spinner("Running AQSE vs Baseline Comparison…"):
+        subprocess.run([
+            "python", "compare_and_report.py",
+            "--n-seeds", "3", "--iters", "40", "--shots", "512", "--outdir", "results"
+        ])
+    st.success("Done! Check results/summary.csv and plots below.")
+
+    # Show summary table
+    try:
+        df_summary = pd.read_csv("results/summary.csv")
+        st.subheader("Comparison Summary Table")
+        st.dataframe(df_summary)
+    except Exception as e:
+        st.error(f"Could not load summary.csv: {e}")
+
+    # Show boxplot images
+    try:
+        st.subheader("Final Energy by Mode")
+        st.image("results/final_energy_box.png")
+    except Exception as e:
+        st.error(f"Could not load final_energy_box.png: {e}")
+
+    try:
+        st.subheader("Total Shots by Mode")
+        st.image("results/total_shots_box.png")
+    except Exception as e:
+        st.error(f"Could not load total_shots_box.png: {e}")
+
+if not run_button and not compare_button:
     st.info("Configure settings and click Run AQSE.")
