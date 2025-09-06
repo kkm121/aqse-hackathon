@@ -4,18 +4,23 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.isotonic import IsotonicRegression
 from sklearn.model_selection import train_test_split
 
-class SurrogateAQSE:
-    def __init__(self, n_estimators=100, random_state=42):
+class EnsembleCalibratedSurrogate:
+    def __init__(self, n_models=6, rf_estimators=50, random_state=42):
         self.model = RandomForestRegressor(
-            n_estimators=n_estimators,
+            n_estimators=rf_estimators,
             random_state=random_state
         )
-        self.iso_list = []   # one isotonic regressor per output
+        self.iso_list = []
         self.is_fitted = False
+        self.X = None
+        self.Y = None
+        self.is_trained = False
 
     def fit(self, X, Y, test_size=0.2):
         X = np.asarray(X)
         Y = np.asarray(Y)
+        self.X = X
+        self.Y = Y
 
         # If Y is 1D → reshape to (n_samples, 1)
         if Y.ndim == 1:
@@ -57,8 +62,9 @@ class SurrogateAQSE:
             self.iso_list.append(iso)
 
         self.is_fitted = True
+        self.is_trained = True
 
-    def predict(self, X):
+    def predict_mean_std(self, X):
         if not self.is_fitted:
             raise RuntimeError("SurrogateAQSE not fitted yet!")
 

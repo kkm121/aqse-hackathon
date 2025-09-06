@@ -22,9 +22,9 @@ class SPSA:
                 raise ValueError("Non-finite loss encountered.")
         except Exception as e:
             print(f"[SPSA] Eval failed: {e}")
-            return self.theta  # safe exit
+            return self.theta, None, None  # safe exit
 
-        # Gradient estimate
+        # Gradient estimate (element-wise division)
         ghat = (loss_plus - loss_minus) / (2.0 * ck * delta)
 
         # Update
@@ -35,4 +35,4 @@ class SPSA:
             lower, upper = self.bounds
             self.theta = np.clip(self.theta, lower, upper)
 
-        return self.theta
+        return self.theta, None, None
