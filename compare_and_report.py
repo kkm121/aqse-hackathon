@@ -2,32 +2,63 @@
 # compare_and_report.py
 # Runs AQSE vs baseline (multi-seed), saves summary + plots.
 
-import os, argparse
+import os
+import argparse
+import traceback
 import pandas as pd
 import matplotlib.pyplot as plt
+
 from controller import run_aqse, pauli_list_4q, coeffs_4q
 
 def run_mode(mode, seed, iters, shots, outdir):
+    """
+    Run either 'aqse' or 'baseline'.
+    Guarantees it returns (df, summary) or raises an exception.
+    """
+    n_qubits = 4
+    gate_err = 0.02
+    pruning_threshold = 0.04
+
     if mode == 'aqse':
-        df, summary = run_aqse(pauli_terms=pauli_list_4q, coeffs_dict=coeffs_4q,
-                               n_qubits=4, iters=iters, shots_per_eval=shots,
-                               trust_threshold=0.07, bootstrap_points=8,
-                               surrogate_models=6, rf_estimators=50,
-                               gate_error_two_q=0.02, pruning_threshold=0.04,
-                               seed=seed)
+        df, summary = run_aqse(
+            pauli_terms=pauli_list_4q,
+            coeffs_dict=coeffs_4q,
+            n_qubits=n_qubits,
+            iters=iters,
+            shots_per_eval=shots,
+            trust_threshold=0.07,
+            bootstrap_points=8,
+            surrogate_models=6,
+            rf_estimators=50,
+            gate_error_two_q=gate_err,
+            pruning_threshold=pruning_threshold,
+            entangler_active=True,
+            seed=seed
+        )
+        return df, summary
+
+    elif mode == 'baseline':
+        # Baseline: force measurement every iteration by using a very negative trust threshold
+        # but keep bootstrap_points >= 1 so shapes/arrays exist for surrogate fitting code paths.
+        df, summary = run_aqse(
+            pauli_terms=pauli_list_4q,
+            coeffs_dict=coeffs_4q,
+            n_qubits=n_qubits,
+            iters=iters,
+            shots_per_eval=shots,
+            trust_threshold=-1.0,   # never trust surrogate -> always measure
+            bootstrap_points=1,     # at least one bootstrap sample to avoid vstack errors
+            surrogate_models=1,
+            rf_estimators=1,
+            gate_error_two_q=gate_err,
+            pruning_threshold=pruning_threshold,
+            entangler_active=True,
+            seed=seed
+        )
+        return df, summary
     else:
-        # baseline: force measurements only
-        df, summary = run_aqse(pauli_terms=pauli_list_4q, coeffs_dict=coeffs_4q,
-                               n_qubits=4, iters=iters, shots_per_eval=shots,
-                               trust_threshold=-1.0,
-                               bootstrap_points=8,
-                               surrogate_models=6, rf_estimators=50,
-                               gate_error_two_q=0.02, pruning_threshold=0.04,
-                               seed=seed)
-    # save trace
-    fname = os.path.join(outdir, f"trace_{mode}_seed{seed}.csv")
-    df.to_csv(fname, index=False)
-    return summary
+        raise ValueError(f"Unknown mode: {mode}")
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -43,26 +74,42 @@ def main():
         for s in range(args.n_seeds):
             seed = 1000 + s
             print(f"Running {mode} seed {seed} ...")
-            summary = run_mode(mode, seed, args.iters, args.shots, args.outdir)
-            rows.append({
-                'mode': mode, 'seed': seed,
-                'final_energy': summary['final_energy'],
-                'total_shots': summary.get('total_shots_aqse', summary.get('total_shots', None)),
-                'shots_saved_pct': summary.get('shots_saved_pct', 0.0)
-            })
+            try:
+                df, summary = run_mode(mode, seed, args.iters, args.shots, args.outdir)
+                rows.append({
+                    'mode': mode, 'seed': seed,
+                    'final_energy': summary.get('final_energy'),
+                    'total_shots_baseline': summary.get('total_shots_baseline'),
+                    'total_shots_aqse': summary.get('total_shots_aqse'),
+                    'shots_saved_pct': summary.get('shots_saved_pct'),
+                    'error': None
+                })
+            except Exception as e:
+                tb = traceback.format_exc()
+                print(f"Error running {mode} seed {seed}: {e}\n{tb}")
+                rows.append({'mode': mode, 'seed': seed, 'error': str(e),
+                             'final_energy': None, 'total_shots_baseline': None,
+                             'total_shots_aqse': None, 'shots_saved_pct': None})
+
     df_all = pd.DataFrame(rows)
     df_all.to_csv(os.path.join(args.outdir, 'summary.csv'), index=False)
 
-    # plots
-    plt.figure(figsize=(6,4))
-    df_all.boxplot(column='final_energy', by='mode')
-    plt.title('Final energy by mode'); plt.suptitle(''); plt.tight_layout()
-    plt.savefig(os.path.join(args.outdir, 'final_energy_box.png'))
+    # plots (only when numeric fields exist)
+    try:
+        plt.figure(figsize=(6,4))
+        df_all.boxplot(column='final_energy', by='mode')
+        plt.title('Final energy by mode'); plt.suptitle(''); plt.tight_layout()
+        plt.savefig(os.path.join(args.outdir, 'final_energy_box.png'))
+    except Exception:
+        print("Could not create final_energy_box.png (maybe missing numeric data).")
 
-    plt.figure(figsize=(6,4))
-    df_all.boxplot(column='total_shots', by='mode')
-    plt.title('Total shots by mode'); plt.suptitle(''); plt.tight_layout()
-    plt.savefig(os.path.join(args.outdir, 'total_shots_box.png'))
+    try:
+        plt.figure(figsize=(6,4))
+        df_all.boxplot(column='total_shots_aqse', by='mode')
+        plt.title('Total shots by mode'); plt.suptitle(''); plt.tight_layout()
+        plt.savefig(os.path.join(args.outdir, 'total_shots_box.png'))
+    except Exception:
+        print("Could not create total_shots_box.png (maybe missing numeric data).")
 
     print("Done. Summary and plots in", args.outdir)
 

@@ -1,7 +1,7 @@
 # shot_allocation.py
 import numpy as np
 
-def allocate_shots_opt(total_shots, coeffs, sigma_pauli, min_shot=1):
+def allocate_shots_opt(coeffs, sigma_pauli, total_shots, min_shot=1):
     coeffs = np.asarray(coeffs, dtype=float)
     sigma_pauli = np.asarray(sigma_pauli, dtype=float)
     n = len(coeffs)
