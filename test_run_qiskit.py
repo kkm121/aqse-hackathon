@@ -1,100 +1,142 @@
-# test_run_qiskit.py  -- robust: tries ibm_cloud then ibm_quantum_platform
+# test_run_qiskit.py  (robust + transpile)
 import os
-import sys
 from qiskit import QuantumCircuit
-
 from qiskit_ibm_runtime import QiskitRuntimeService
+from qiskit.compiler import transpile
 
-def create_service_try_channels(token, instance):
-    # Try the modern IBM Cloud channel first (most common for IAM tokens)
-    for ch in ("ibm_cloud", "ibm_quantum_platform"):
-        try:
-            print(f"Attempting QiskitRuntimeService(channel='{ch}', instance={instance}) ...")
-            svc = QiskitRuntimeService(channel=ch, token=token, instance=instance)
-            print(f"Connected using channel='{ch}'")
-            return svc
-        except Exception as e:
-            print(f"Channel '{ch}' failed: {e}")
-    # Last resort: try creating without explicit channel (some SDK setups)
+# detect sampler versions
+try:
+    from qiskit_ibm_runtime import SamplerV2 as SamplerV2
+except Exception:
+    SamplerV2 = None
+try:
+    from qiskit_ibm_runtime import Sampler as SamplerV1
+except Exception:
+    SamplerV1 = None
+
+def resolve_backend_entry(service, entry):
     try:
-        print("Attempting QiskitRuntimeService(...) without explicit channel ...")
-        svc = QiskitRuntimeService(token=token, instance=instance)
-        print("Connected without explicit channel.")
-        return svc
-    except Exception as e:
-        print("All attempts failed. Final exception:", e)
-        raise
+        if hasattr(entry, "name") and callable(getattr(entry, "name")):
+            return entry
+    except Exception:
+        pass
+    if isinstance(entry, str):
+        try:
+            return service.backend(entry)
+        except Exception as e:
+            try:
+                for cand in service.backends():
+                    if isinstance(cand, str) and cand == entry:
+                        return service.backend(cand)
+                    else:
+                        try:
+                            if cand.name() == entry:
+                                return cand
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+            raise RuntimeError(f"Could not resolve backend name '{entry}': {e}")
+    raise RuntimeError(f"Unrecognized backend entry: {repr(entry)}")
+
+def create_sampler(service, backend):
+    if SamplerV2 is not None:
+        try:
+            return SamplerV2(mode=backend)
+        except Exception:
+            try:
+                return SamplerV2(session=service)
+            except Exception:
+                pass
+    if SamplerV1 is not None:
+        try:
+            return SamplerV1(backend=backend)
+        except Exception:
+            try:
+                return SamplerV1(session=service, backend=backend)
+            except Exception:
+                pass
+    raise RuntimeError("No compatible Sampler constructor found for installed qiskit-ibm-runtime.")
 
 def main():
     token = os.getenv("QISKIT_IBM_TOKEN")
     instance = os.getenv("IBMQ_INSTANCE", None)
-    backend_name = os.getenv("QISKIT_BACKEND", None)
-
+    forced = os.getenv("QISKIT_BACKEND", None)
     if not token:
-        raise RuntimeError("QISKIT_IBM_TOKEN not set in environment. Set it and re-run.")
+        raise RuntimeError("QISKIT_IBM_TOKEN not set in environment.")
 
-    print("Using instance:", instance)
+    svc = None
+    for ch in ("ibm_cloud", "ibm_quantum_platform", None):
+        try:
+            if ch is None:
+                svc = QiskitRuntimeService(token=token, instance=instance)
+            else:
+                svc = QiskitRuntimeService(channel=ch, token=token, instance=instance)
+            print("Connected using channel:", ch)
+            break
+        except Exception as e:
+            print("Channel", ch, "failed:", e)
+    if svc is None:
+        raise RuntimeError("Could not create QiskitRuntimeService")
 
-    # Create the runtime service (tries channels)
-    service = create_service_try_channels(token, instance)
-
-    # Show available backends
-    try:
-        backends = service.backends()
-        print("Available backends in instance (first 20):")
-        for b in backends[:20]:
+    raw = svc.backends()
+    print("Backends raw entries:", len(raw))
+    resolved = []
+    for entry in raw[:50]:
+        if isinstance(entry, str):
+            print(" - (string) ", entry)
             try:
-                cfg = b.configuration()
-                st = b.status()
-                print(f" - {b.name():25s}  simulator={getattr(cfg,'simulator',False)}  operational={getattr(st,'operational','unknown')}  pending_jobs={getattr(st,'pending_jobs','unknown')}")
+                resolved.append(resolve_backend_entry(svc, entry))
+            except Exception as ex:
+                print("   -> could not resolve:", ex)
+        else:
+            try:
+                print(" - (object) ", entry.name())
+                resolved.append(entry)
             except Exception:
-                print(f" - {b.name():25s}  (no detailed info)")
-    except Exception as e:
-        print("Could not list backends:", e)
-
-    # Choose backend
-    if backend_name:
+                print(" - (object repr) ", repr(entry))
+    backend = None
+    if forced:
         try:
-            backend = service.backend(backend_name)
-            print("Using forced backend (env):", backend_name)
+            backend = resolve_backend_entry(svc, forced)
         except Exception as e:
-            print(f"Requested backend '{backend_name}' not available: {e}")
-            print("Falling back to automatic selection.")
-            backend_name = None
-
-    if backend_name is None:
-        # auto-select first operational real device, else first backend
-        try:
-            candidates = [b for b in service.backends() if not getattr(b.configuration(), "simulator", False)]
-            candidates = [b for b in candidates if getattr(b.status(), "operational", True)]
-            if not candidates:
-                candidates = list(service.backends())
-            candidates.sort(key=lambda b: getattr(b.status(), "pending_jobs", 0))
-            backend = candidates[0]
-        except Exception as e:
-            print("Auto-selection failed, trying first backend directly:", e)
-            backend = service.backends()[0]
-
-    print("Selected backend:", backend.name(), " simulator=", getattr(backend.configuration(), "simulator", None))
-
-    # Run a trivial single-qubit circuit via Sampler to verify
+            print("Forced backend could not be resolved:", e)
+            backend = None
+    if backend is None:
+        if resolved:
+            backend = resolved[0]
+        else:
+            raise RuntimeError("No backends available to select")
+    backend = resolve_backend_entry(svc, backend) if isinstance(backend, str) else backend
     try:
-        from qiskit_ibm_runtime import Sampler
-    except Exception as e:
-        print("Could not import Sampler. Check qiskit-ibm-runtime version:", e)
-        raise
+        name = backend.name()
+    except Exception:
+        name = str(backend)
+    try:
+        cfg = backend.configuration()
+        is_sim = getattr(cfg, "simulator", None)
+    except Exception:
+        is_sim = None
+    print("Selected backend:", name, " simulator=", is_sim)
 
-    sampler = Sampler(backend=backend)
+    sampler = create_sampler(svc, backend)
+
     qc = QuantumCircuit(1, 1)
     qc.h(0)
     qc.measure(0, 0)
-    print("Submitting a trivial H-measure circuit (256 shots)... (this can take time on real hardware)")
-    job = sampler.run([qc], shots=256)
-    res = job.result()
-    print("Raw result repr():")
-    print(repr(res)[:1000])  # print a truncated repr for readability
 
-    # Try to extract counts if present
+    try:
+        transpiled = transpile([qc], backend=backend, optimization_level=1)[0]
+        print("Successfully transpiled circuit to backend target.")
+    except Exception as e:
+        print("Transpile failed:", e)
+        transpiled = qc
+
+    print("Submitting trivial circuit (256 shots)...")
+    job = sampler.run([transpiled], shots=256)
+    res = job.result()
+    print("Result repr:", repr(res)[:1000])
+
     try:
         if hasattr(res, "__len__") and len(res) > 0:
             first = res[0]
@@ -102,10 +144,12 @@ def main():
                 print("Counts:", first.get_counts())
             else:
                 data = getattr(first, "data", None)
-                print("First entry type:", type(first))
-                print("First entry data repr (truncated):", repr(data)[:800])
+                print("First entry data repr (truncated):", repr(data)[:400])
         else:
-            print("Result object has no length or is empty; inspect repr above.")
+            if hasattr(res, "get_counts") and callable(res.get_counts):
+                print("Counts (top-level):", res.get_counts())
+            else:
+                print("Result returned but could not extract counts; see repr above.")
     except Exception as e:
         print("Exception while extracting counts:", e)
 
